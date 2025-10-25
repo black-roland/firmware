@@ -49,8 +49,6 @@ constexpr int reconnectMax = 5;
 // FIXME - this size calculation is super sloppy, but it will go away once we dynamically alloc meshpackets
 static uint8_t bytes[meshtastic_MqttClientProxyMessage_size + 30]; // 12 for channel name and 16 for nodeid
 
-static bool isMqttServerAddressPrivate = false;
-
 inline void onReceiveProto(char *topic, byte *payload, size_t length)
 {
     const DecodedServiceEnvelope e(payload, length);
@@ -209,30 +207,6 @@ inline void onReceiveJson(byte *payload, size_t length)
     }
 }
 #endif
-
-/// Determines if the given IPAddress is a private IPv4 address, i.e. not routable on the public internet.
-bool isPrivateIpAddress(const IPAddress &ip)
-{
-    constexpr struct {
-        uint32_t network;
-        uint32_t mask;
-    } privateCidrRanges[] = {
-        {.network = 192u << 24 | 168 << 16, .mask = 0xffff0000}, // 192.168.0.0/16
-        {.network = 172u << 24 | 16 << 16, .mask = 0xfff00000},  // 172.16.0.0/12
-        {.network = 169u << 24 | 254 << 16, .mask = 0xffff0000}, // 169.254.0.0/16
-        {.network = 10u << 24, .mask = 0xff000000},              // 10.0.0.0/8
-        {.network = 127u << 24 | 1, .mask = 0xffffffff},         // 127.0.0.1/32
-        {.network = 100u << 24 | 64 << 16, .mask = 0xffc00000},  // 100.64.0.0/10
-    };
-    const uint32_t addr = ntohl(ip);
-    for (const auto &cidrRange : privateCidrRanges) {
-        if (cidrRange.network == (addr & cidrRange.mask)) {
-            LOG_INFO("MQTT server on a private IP");
-            return true;
-        }
-    }
-    return false;
-}
 
 // Separate a <host>[:<port>] string. Returns a pair containing the parsed host and port. If the port is
 // not present in the input string, or is invalid, the value of the `port` argument will be returned.
@@ -409,8 +383,6 @@ MQTT::MQTT() : concurrency::OSThread("mqtt"), mqttQueue(MAX_MQTT_QUEUE)
 
         String host = parseHostAndPort(moduleConfig.mqtt.address).first;
         isConfiguredForDefaultServer = isDefaultServer(host);
-        IPAddress ip;
-        isMqttServerAddressPrivate = ip.fromString(host.c_str()) && isPrivateIpAddress(ip);
 
 #if HAS_NETWORKING
         if (!moduleConfig.mqtt.proxy_to_client_enabled)
@@ -506,7 +478,6 @@ void MQTT::reconnect()
             enabled = true; // Start running background process again
             runASAP = true;
             reconnectCount = 0;
-            isMqttServerAddressPrivate = isPrivateIpAddress(clientConnection->remoteIP());
 
             publishNodeInfo();
             sendSubscriptions();
@@ -695,16 +666,6 @@ void MQTT::onSend(const meshtastic_MeshPacket &mp_encrypted, const meshtastic_Me
 
     // mp_decoded will not be decoded when it's PKI encrypted and not directed to us
     if (mp_decoded.which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
-        // For uplinking other's packets, check if it's not OK to MQTT or if it's an older packet without the bitfield
-        bool dontUplink = !mp_decoded.decoded.has_bitfield || !(mp_decoded.decoded.bitfield & BITFIELD_OK_TO_MQTT_MASK);
-        // check for the lowest bit of the data bitfield set false, and the use of one of the default keys.
-        if (!isFromUs(&mp_decoded) && !isMqttServerAddressPrivate && dontUplink &&
-            (ch.settings.psk.size < 2 || (ch.settings.psk.size == 16 && memcmp(ch.settings.psk.bytes, defaultpsk, 16)) ||
-             (ch.settings.psk.size == 32 && memcmp(ch.settings.psk.bytes, eventpsk, 32)))) {
-            LOG_INFO("MQTT onSend - Not forwarding packet due to DontMqttMeBro flag");
-            return;
-        }
-
         if (isConfiguredForDefaultServer && (mp_decoded.decoded.portnum == meshtastic_PortNum_RANGE_TEST_APP ||
                                              mp_decoded.decoded.portnum == meshtastic_PortNum_DETECTION_SENSOR_APP)) {
             LOG_DEBUG("MQTT onSend - Ignoring range test or detection sensor message on public mqtt");
