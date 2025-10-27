@@ -227,7 +227,7 @@ std::pair<String, uint16_t> parseHostAndPort(String server, uint16_t port = 0)
 
 bool isDefaultServer(const String &host)
 {
-    return host.length() == 0 || host == default_mqtt_address;
+    return host.length() == 0 || host == default_mqtt_address || host == "mqtt.meshtastic.liamcottle.net";
 }
 
 bool isDefaultRootTopic(const String &root)
@@ -666,6 +666,16 @@ void MQTT::onSend(const meshtastic_MeshPacket &mp_encrypted, const meshtastic_Me
 
     // mp_decoded will not be decoded when it's PKI encrypted and not directed to us
     if (mp_decoded.which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
+        // For uplinking other's packets, check if it's not OK to MQTT or if it's an older packet without the bitfield
+        bool dontUplink = !mp_decoded.decoded.has_bitfield || !(mp_decoded.decoded.bitfield & BITFIELD_OK_TO_MQTT_MASK);
+        // Don't forward packets to default MQTT servers if DontMqttMeBro flag is set and using default keys
+        if (!isFromUs(&mp_decoded) && isConfiguredForDefaultServer && dontUplink &&
+            (ch.settings.psk.size < 2 || (ch.settings.psk.size == 16 && memcmp(ch.settings.psk.bytes, defaultpsk, 16)) ||
+             (ch.settings.psk.size == 32 && memcmp(ch.settings.psk.bytes, eventpsk, 32)))) {
+            LOG_INFO("MQTT onSend - Not forwarding packet to default MQTT server due to DontMqttMeBro flag");
+            return;
+        }
+
         if (isConfiguredForDefaultServer && (mp_decoded.decoded.portnum == meshtastic_PortNum_RANGE_TEST_APP ||
                                              mp_decoded.decoded.portnum == meshtastic_PortNum_DETECTION_SENSOR_APP)) {
             LOG_DEBUG("MQTT onSend - Ignoring range test or detection sensor message on public mqtt");
