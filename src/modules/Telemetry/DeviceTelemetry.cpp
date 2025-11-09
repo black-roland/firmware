@@ -19,18 +19,7 @@
 int32_t DeviceTelemetryModule::runOnce()
 {
     refreshUptime();
-    bool isImpoliteRole =
-        IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_SENSOR, meshtastic_Config_DeviceConfig_Role_ROUTER);
-    if (((lastSentToMesh == 0) ||
-         ((uptimeLastMs - lastSentToMesh) >=
-          Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.device_update_interval,
-                                                  default_telemetry_broadcast_interval_secs, numOnlineNodes))) &&
-        airTime->isTxAllowedChannelUtil(!isImpoliteRole) && airTime->isTxAllowedAirUtil() &&
-        config.device.role != meshtastic_Config_DeviceConfig_Role_REPEATER &&
-        config.device.role != meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN) {
-        sendTelemetry();
-        lastSentToMesh = uptimeLastMs;
-    } else if (service->isToPhoneQueueEmpty()) {
+    if (service->isToPhoneQueueEmpty()) {
         // Just send to phone when it's not our time to send to mesh yet
         // Only send while queue is empty (phone assumed connected)
         sendTelemetry(NODENUM_BROADCAST, true);

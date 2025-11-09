@@ -202,6 +202,49 @@ inline void onReceiveJson(byte *payload, size_t length)
             pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &meshtastic_Position_msg,
                                &pos); // make the Data protobuf from position
         service->sendToMesh(p, RX_SRC_LOCAL);
+    } else if (json["type"]->AsString().compare("sendhostmetrics") == 0 && json["payload"]->IsObject()) {
+        JSONObject metrics;
+        metrics = json["payload"]->AsObject(); // get nested JSON HostMetrics
+        meshtastic_Telemetry tel = meshtastic_Telemetry_init_default;
+        tel.which_variant = meshtastic_Telemetry_host_metrics_tag;
+        meshtastic_HostMetrics hm = meshtastic_HostMetrics_init_zero;
+        tel.variant.host_metrics = hm;
+
+        if (metrics.find("uptime_seconds") != metrics.end() && metrics["uptime_seconds"]->IsNumber())
+            tel.variant.host_metrics.uptime_seconds = metrics["uptime_seconds"]->AsNumber();
+        if (metrics.find("diskfree1_bytes") != metrics.end() && metrics["diskfree1_bytes"]->IsNumber())
+            tel.variant.host_metrics.diskfree1_bytes = metrics["diskfree1_bytes"]->AsNumber();
+        if (metrics.find("freemem_bytes") != metrics.end() && metrics["freemem_bytes"]->IsNumber())
+            tel.variant.host_metrics.freemem_bytes = metrics["freemem_bytes"]->AsNumber();
+        if (metrics.find("load1") != metrics.end() && metrics["load1"]->IsNumber())
+            tel.variant.host_metrics.load1 = metrics["load1"]->AsNumber() * 100;
+        if (metrics.find("load5") != metrics.end() && metrics["load5"]->IsNumber())
+            tel.variant.host_metrics.load5 = metrics["load5"]->AsNumber() * 100;
+        if (metrics.find("load15") != metrics.end() && metrics["load15"]->IsNumber())
+            tel.variant.host_metrics.load15 = metrics["load15"]->AsNumber() * 100;
+        if (metrics.find("user_string") != metrics.end() && metrics["user_string"]->IsString()) {
+            std::string userStr = metrics["user_string"]->AsString();
+            if (userStr.length() > 0) {
+                strncpy(tel.variant.host_metrics.user_string, userStr.c_str(), sizeof(tel.variant.host_metrics.user_string));
+                tel.variant.host_metrics.has_user_string = true;
+            }
+        }
+
+        // construct protobuf data packet using TELEMETRY_APP, send it to the mesh
+        meshtastic_MeshPacket *p = router->allocForSending();
+        p->decoded.portnum = meshtastic_PortNum_TELEMETRY_APP;
+        if (json.find("channel") != json.end() && json["channel"]->IsNumber() &&
+            (json["channel"]->AsNumber() < channels.getNumChannels()))
+            p->channel = json["channel"]->AsNumber();
+        p->to = NODENUM_BROADCAST;
+        if (json.find("to") != json.end() && json["to"]->IsNumber())
+            p->to = json["to"]->AsNumber();
+        if (json.find("hopLimit") != json.end() && json["hopLimit"]->IsNumber())
+            p->hop_limit = json["hopLimit"]->AsNumber();
+        p->decoded.payload.size =
+            pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &meshtastic_Telemetry_msg,
+                               &tel); // make the Data protobuf from telemetry
+        service->sendToMesh(p, RX_SRC_LOCAL);
     } else {
         LOG_DEBUG("JSON ignore downlink message with unsupported type");
     }
