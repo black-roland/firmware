@@ -51,6 +51,11 @@ std::string MeshPacketSerializer::JsonSerialize(const meshtastic_MeshPacket *mp,
                 msgPayload["text"] = new JSONValue(payloadStr);
                 jsonObj["payload"] = new JSONValue(msgPayload);
             }
+            // properties unavailable in the vanilla firmware
+            if (mp->decoded.reply_id != 0)
+                jsonObj["reply_id"] = new JSONValue((unsigned int)mp->decoded.reply_id);
+            if (mp->decoded.emoji != 0)
+                jsonObj["emoji"] = new JSONValue((unsigned int)mp->decoded.emoji);
             break;
         }
         case meshtastic_PortNum_TELEMETRY_APP: {
