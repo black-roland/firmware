@@ -670,7 +670,9 @@ void MQTT::publishQueuedMessages()
     LOG_DEBUG("Publish enqueued MQTT message");
     const std::unique_ptr<QueueEntry> entry(mqttQueue.dequeuePtr(0));
     LOG_INFO("publish %s, %u bytes from queue", entry->topic.c_str(), entry->envBytes.size());
-    publish(entry->topic.c_str(), entry->envBytes.data(), entry->envBytes.size(), false);
+    if (!entry->skipBinary) {
+        publish(entry->topic.c_str(), entry->envBytes.data(), entry->envBytes.size(), false);
+    }
 
 #if !defined(ARCH_NRF52) ||                                                                                                      \
     defined(NRF52_USE_JSON) // JSON is not supported on nRF52, see issue #2804 ### Fixed by using ArduinoJson ###
@@ -712,23 +714,31 @@ void MQTT::onSend(const meshtastic_MeshPacket &mp_encrypted, const meshtastic_Me
     if (!uplinkEnabled)
         return; // no channels have an uplink enabled
     auto &ch = channels.getByIndex(chIndex);
+    bool skipBinary = false;
 
     // mp_decoded will not be decoded when it's PKI encrypted and not directed to us
     if (mp_decoded.which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
-        // For uplinking other's packets, check if it's not OK to MQTT or if it's an older packet without the bitfield
-        bool dontUplink = !mp_decoded.decoded.has_bitfield || !(mp_decoded.decoded.bitfield & BITFIELD_OK_TO_MQTT_MASK);
-        // Don't forward packets to default MQTT servers if DontMqttMeBro flag is set and using default keys
-        if (!isFromUs(&mp_decoded) && isConfiguredForDefaultServer && dontUplink &&
-            (ch.settings.psk.size < 2 || (ch.settings.psk.size == 16 && memcmp(ch.settings.psk.bytes, defaultpsk, 16)) ||
-             (ch.settings.psk.size == 32 && memcmp(ch.settings.psk.bytes, eventpsk, 32)))) {
-            LOG_INFO("MQTT onSend - Not forwarding packet to default MQTT server due to DontMqttMeBro flag");
+        // Always ignore range test / detection sensor on default server
+        if (mp_decoded.decoded.portnum == meshtastic_PortNum_RANGE_TEST_APP ||
+            mp_decoded.decoded.portnum == meshtastic_PortNum_DETECTION_SENSOR_APP) {
+            LOG_DEBUG("MQTT onSend - Ignoring range test or detection sensor message on public mqtt");
             return;
         }
 
-        if (isConfiguredForDefaultServer && (mp_decoded.decoded.portnum == meshtastic_PortNum_RANGE_TEST_APP ||
-                                             mp_decoded.decoded.portnum == meshtastic_PortNum_DETECTION_SENSOR_APP)) {
-            LOG_DEBUG("MQTT onSend - Ignoring range test or detection sensor message on public mqtt");
-            return;
+        // For uplinking other's packets, check if it's not OK to MQTT or if it's an older packet without the bitfield
+        bool dontUplink = !mp_decoded.decoded.has_bitfield || !(mp_decoded.decoded.bitfield & BITFIELD_OK_TO_MQTT_MASK);
+
+        // For packets not originating from us, enforce the OK_TO_MQTT bitfield
+        if (!isFromUs(&mp_decoded) && dontUplink) {
+            if (isConfiguredForDefaultServer) {
+                // Default server: block completely (both binary and JSON)
+                LOG_INFO("MQTT onSend - Not forwarding packet to default MQTT server due to DontMqttMeBro flag");
+                return;
+            } else {
+                // Non-default server: skip binary, but allow JSON later
+                LOG_INFO("MQTT onSend - Skipping binary publish to non-default server, will forward JSON");
+                skipBinary = true;
+            }
         }
     }
     // Either encrypted packet (we couldn't decrypt) is marked as pki_encrypted, or we could decode the PKI encrypted packet
@@ -761,8 +771,10 @@ void MQTT::onSend(const meshtastic_MeshPacket &mp_encrypted, const meshtastic_Me
     std::string topic = cryptTopic + channelId + "/" + nodeId;
 
     if (moduleConfig.mqtt.proxy_to_client_enabled || this->isConnectedDirectly()) {
-        LOG_DEBUG("MQTT Publish %s, %u bytes", topic.c_str(), numBytes);
-        publish(topic.c_str(), bytes, numBytes, false);
+        if (!skipBinary) {
+            LOG_DEBUG("MQTT Publish %s, %u bytes", topic.c_str(), numBytes);
+            publish(topic.c_str(), bytes, numBytes, false);
+        }
 
 #if !defined(ARCH_NRF52) ||                                                                                                      \
     defined(NRF52_USE_JSON) // JSON is not supported on nRF52, see issue #2804 ### Fixed by using ArduinoJson ###
@@ -789,6 +801,7 @@ void MQTT::onSend(const meshtastic_MeshPacket &mp_encrypted, const meshtastic_Me
         }
         entry->topic = std::move(topic);
         entry->envBytes.assign(bytes, numBytes);
+        entry->skipBinary = skipBinary;
         if (mqttQueue.enqueue(entry, 0) == false) {
             LOG_CRIT("Failed to add a message to mqttQueue!");
             abort();

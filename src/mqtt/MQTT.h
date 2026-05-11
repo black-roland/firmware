@@ -68,6 +68,7 @@ class MQTT : private concurrency::OSThread
     struct QueueEntry {
         std::string topic;
         std::basic_string<uint8_t> envBytes; // binary/pb_encode_to_bytes ServiceEnvelope
+        bool skipBinary = false;             // if true, skip binary publish but allow JSON
     };
     PointerQueue<QueueEntry> mqttQueue;
 

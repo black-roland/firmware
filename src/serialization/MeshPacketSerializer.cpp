@@ -56,6 +56,10 @@ std::string MeshPacketSerializer::JsonSerialize(const meshtastic_MeshPacket *mp,
                 jsonObj["reply_id"] = new JSONValue((unsigned int)mp->decoded.reply_id);
             if (mp->decoded.emoji != 0)
                 jsonObj["emoji"] = new JSONValue((unsigned int)mp->decoded.emoji);
+            if (mp->decoded.has_bitfield)
+                jsonObj["bitfield"] = new JSONValue((unsigned int)mp->decoded.bitfield);
+            else
+                jsonObj["bitfield"] = new JSONValue();
             break;
         }
         case meshtastic_PortNum_TELEMETRY_APP: {
